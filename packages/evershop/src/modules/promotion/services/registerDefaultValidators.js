@@ -76,16 +76,14 @@ export function registerDefaultValidators() {
       const minimumSubTotal = !Number.isNaN(parseFloat(conditions.order_total))
         ? parseFloat(conditions.order_total)
         : null;
-      if (minimumSubTotal === null) {
-        return true;
+      if (
+        minimumSubTotal && priceIncludingTax
+          ? cart.getData('sub_total_incl_tax')
+          : cart.getData('sub_total') < minimumSubTotal
+      ) {
+        return false;
       }
-      let check = false;
-      if (priceIncludingTax) {
-        check = cart.getData('sub_total_incl_tax') >= minimumSubTotal;
-      } else {
-        check = cart.getData('sub_total') >= minimumSubTotal;
-      }
-      return check;
+      return true;
     },
     function minimumQtyValidator(cart, coupon) {
       const conditions = coupon.condition;
