@@ -23,5 +23,8 @@ try {
   const { rows: variants } = await pool.query(`SELECT sku,variant_group_id FROM product WHERE sku LIKE 'QA-METRIC-%' AND variant_group_id IS NOT NULL`);
   assert.equal(variants.length, 3);
   assert.equal(new Set(variants.map(row => row.variant_group_id)).size, 1);
+  const { rows: [widget] } = await pool.query(`SELECT settings FROM widget_instance WHERE name='Demo Homepage Products'`);
+  const widgetSettings = typeof widget.settings === 'string' ? JSON.parse(widget.settings) : widget.settings;
+  assert.match(widgetSettings.subText, /QA-METRIC-40/);
   console.log(JSON.stringify({ phase: 'metric-verify', database: process.env.DB_NAME, priceIncludingTax: true, sellToCountries: 'all', shippingCountries: ['US'], virtual: true, sparseVariants: variants.length, coupon }, null, 2));
 } finally { await pool.end(); }
