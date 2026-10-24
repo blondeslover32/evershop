@@ -174,6 +174,7 @@ export function BillingAddress({
                         <div className="text-inherit">
                           <CustomerAddressForm
                             surface="billing"
+                            countryScope="SHIPPING"
                             namePrefix="billingAddress"
                             address={undefined} // Always start empty for different address
                           />
@@ -197,6 +198,7 @@ export function BillingAddress({
                 <div className="text-inherit">
                   <CustomerAddressForm
                     surface="billing"
+                            countryScope="SHIPPING"
                     namePrefix="billingAddress"
                     address={undefined} // Always start empty for different address
                   />
