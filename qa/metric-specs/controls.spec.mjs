@@ -48,8 +48,9 @@ test('#683 qualifying tax-inclusive subtotal accepts the threshold coupon', asyn
   await page.getByRole('button', { name: 'Apply', exact: true }).click();
   const response = await result;
   await testInfo.attach('coupon-response', { body: JSON.stringify({ status: response.status(), body: await response.json() }), contentType: 'application/json' });
-  await expect(page.getByText('Discount(QA-METRIC-40)', { exact: true })).toBeVisible();
-  await expect(page.getByText('$5.00', { exact: true })).toBeVisible();
-  await expect(page.getByText('$40.00', { exact: true })).toBeVisible();
+  const summary = page.locator('.cart__total__summary').filter({ visible: true });
+  await expect(summary.getByText('Discount(QA-METRIC-40)', { exact: true })).toBeVisible();
+  await expect(summary).toContainText('$5.00');
+  await expect(summary.locator('.grand-total')).toContainText('$40.00');
   await testInfo.attach('coupon-tree', { body: await page.locator('body').ariaSnapshot(), contentType: 'text/plain' });
 });
