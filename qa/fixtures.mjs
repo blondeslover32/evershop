@@ -42,6 +42,11 @@ try {
   await pool.query('DELETE FROM product_collection WHERE collection_id=$1', [homepage.collection_id]);
   await pool.query(`INSERT INTO product_collection(collection_id,product_id)
     SELECT $1,product_id FROM product WHERE sku LIKE 'QA-METRIC-%' OR sku='CUP-001-WHT'`, [homepage.collection_id]);
+  const { rows: [homeWidget] } = await pool.query(`SELECT widget_instance_id,settings FROM widget_instance WHERE name='Demo Homepage Products'`);
+  assert.ok(homeWidget, 'Seeded homepage widget is required');
+  const widgetSettings = typeof homeWidget.settings === 'string' ? JSON.parse(homeWidget.settings) : homeWidget.settings;
+  widgetSettings.subText = 'Use coupon QA-METRIC-40 for $5 off orders of $40 or more.';
+  await pool.query('UPDATE widget_instance SET settings=$1 WHERE widget_instance_id=$2', [JSON.stringify(widgetSettings), homeWidget.widget_instance_id]);
   for (const [name, value] of Object.entries({ priceIncludingTax: '1', addressDefaultCountry: 'US' })) {
     await pool.query(`INSERT INTO setting(name,value,is_json) VALUES($1,$2,false) ON CONFLICT(name) DO UPDATE SET value=EXCLUDED.value,is_json=false`, [name, value]);
   }
