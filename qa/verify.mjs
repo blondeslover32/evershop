@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { spawnSync } from 'node:child_process';
-assert.match(process.env.DB_NAME || '', /^metric_/);
+assert.match(process.env.DB_NAME || '', /^(?:evershop_)?metric_/);
 assert.equal(spawnSync(process.execPath, ['qa/store-verify.mjs'], { stdio: 'inherit', env: process.env }).status, 0);
 const load = (file) => import(pathToFileURL(resolve('packages/evershop/dist', file)).href);
 const { pool } = await load('lib/postgres/connection.js');
