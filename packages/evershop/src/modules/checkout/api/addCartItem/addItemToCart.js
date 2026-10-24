@@ -53,7 +53,7 @@ export default async (request, response, next) => {
     response.$body = {
       data: {
         item: item.export(),
-        count: cart.getData('total_qty'),
+        count: cart.getItems().length,
         cartId: cart.getData('uuid')
       }
     };

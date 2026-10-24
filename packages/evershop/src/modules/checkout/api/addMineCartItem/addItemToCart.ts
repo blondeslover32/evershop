@@ -50,7 +50,7 @@ export default async (request: EvershopRequest, response, next) => {
     response.$body = {
       data: {
         item: item.export(),
-        count: myCart.getData('total_qty'),
+        count: myCart.getItems().length,
         cartId: myCart.getData('uuid')
       }
     };
