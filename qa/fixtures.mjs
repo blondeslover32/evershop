@@ -5,7 +5,7 @@ import { resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { spawnSync } from 'node:child_process';
 
-assert.match(process.env.DB_NAME || '', /^metric_/, 'Refuse to modify a non-metric database');
+assert.match(process.env.DB_NAME || '', /^(?:evershop_)?metric_/, 'Refuse to modify a non-metric database');
 const base = spawnSync(process.execPath, ['qa/store-fixtures.mjs'], { stdio: 'inherit', env: process.env });
 assert.equal(base.status, 0, 'Base store fixture failed');
 const load = (file) => import(pathToFileURL(resolve('packages/evershop/dist', file)).href);
