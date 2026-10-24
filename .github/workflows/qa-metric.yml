@@ -1,0 +1,286 @@
+# TEMPLATE: copy only to .github/workflows/qa-metric.yml in the authorized shop fork.
+# Frozen Shop pack reviewed at d3c71eded1a7d3f69dc91b4aeae536b147b46cf6.
+# Two external reports + one maintainer report; local controls are not AI detections.
+# Draft only: no automatic triggers, paid dispatch or required check activation.
+name: Historical QA metric
+
+"on":
+  workflow_dispatch:
+    inputs:
+      cases_json:
+        description: 'Exact independently reviewed three-case pack; edits require a new review'
+        default: '[{"id":"variants-964","issue":964,"pr_number":1,"fixed_sha":"04b433a0df5d8e2676f8b5c2c57e881530aa44aa","reverted_sha":"ab72e7aac865dd9cc8585edc20baef314eb4bb66"},{"id":"billing-934","issue":934,"pr_number":2,"fixed_sha":"04b433a0df5d8e2676f8b5c2c57e881530aa44aa","reverted_sha":"331d329807c80d0c3a7066905247cf91581a5d30"},{"id":"coupon-683","issue":683,"pr_number":3,"fixed_sha":"04b433a0df5d8e2676f8b5c2c57e881530aa44aa","reverted_sha":"c68dc7a477fd9edb3f184770f5faa80ca2006727"}]'
+        type: string
+        required: true
+
+permissions:
+  contents: read
+
+concurrency:
+  group: historical-qa-metric
+  cancel-in-progress: false
+
+jobs:
+  cases:
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.validate.outputs.matrix }}
+    steps:
+      - name: Require a real reviewed case matrix
+        id: validate
+        env:
+          CASES_JSON: ${{ inputs.cases_json }}
+        run: |
+          python3 - <<'PY'
+          import json, os, re
+          cases = json.loads(os.environ['CASES_JSON'])
+          assert isinstance(cases, list) and 3 <= len(cases) <= 5, 'Supply 3–5 reviewed cases'
+          ids, issues, revisions = set(), set(), set()
+          for case in cases:
+              assert set(case) == {'id', 'issue', 'pr_number', 'fixed_sha', 'reverted_sha'}, 'Unexpected case fields'
+              assert isinstance(case['id'], str) and re.fullmatch(r'[a-z0-9][a-z0-9-]{0,39}', case['id']), 'Invalid case id'
+              assert case['id'] not in ids, 'Duplicate case id'
+              ids.add(case['id'])
+              for key in ('issue', 'pr_number'):
+                  assert type(case[key]) is int and case[key] > 0, f'Invalid {key}'
+              assert case['issue'] not in issues, 'Each historical issue may appear only once'
+              issues.add(case['issue'])
+              for key in ('fixed_sha', 'reverted_sha'):
+                  assert isinstance(case[key], str) and re.fullmatch('[0-9a-f]{40}', case[key]), 'Use immutable 40-character SHAs'
+              assert case['fixed_sha'] != case['reverted_sha'], 'The control and regression must differ'
+              pair = (case['fixed_sha'], case['reverted_sha'])
+              assert pair not in revisions, 'Each fixed/reverted revision pair may appear only once'
+              revisions.add(pair)
+          reviewed = json.loads('[{"id":"variants-964","issue":964,"pr_number":1,"fixed_sha":"04b433a0df5d8e2676f8b5c2c57e881530aa44aa","reverted_sha":"ab72e7aac865dd9cc8585edc20baef314eb4bb66"},{"id":"billing-934","issue":934,"pr_number":2,"fixed_sha":"04b433a0df5d8e2676f8b5c2c57e881530aa44aa","reverted_sha":"331d329807c80d0c3a7066905247cf91581a5d30"},{"id":"coupon-683","issue":683,"pr_number":3,"fixed_sha":"04b433a0df5d8e2676f8b5c2c57e881530aa44aa","reverted_sha":"c68dc7a477fd9edb3f184770f5faa80ca2006727"}]')
+          assert cases == reviewed, 'Use the exact reviewed three-case manifest, in its frozen order'
+          with open(os.environ['GITHUB_OUTPUT'], 'a') as output:
+              output.write('matrix=' + json.dumps({'include': cases}, separators=(',', ':')) + '\n')
+          PY
+
+  replay:
+    needs: cases
+    name: Historical replay (${{ matrix.id }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 65
+    strategy:
+      fail-fast: false
+      max-parallel: 1
+      matrix: ${{ fromJSON(needs.cases.outputs.matrix) }}
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      DB_HOST: localhost
+      DB_PORT: '5432'
+      DB_USER: postgres
+      DB_PASSWORD: postgres
+      DB_SSLMODE: disable
+      PORT: '3000'
+      BASE_URL: http://localhost:3000
+      QA_BASE_URL: http://localhost:3000
+      SUPPRESS_NO_CONFIG_WARNING: '1'
+      JWT_ADMIN_SECRET: qa-admin-secret-0123456789abcdef
+      JWT_ADMIN_REFRESH_SECRET: qa-admin-refresh-0123456789abcdef
+      JWT_CUSTOMER_SECRET: qa-customer-secret-0123456789abcdef
+      JWT_CUSTOMER_REFRESH_SECRET: qa-customer-refresh-0123456789abcdef
+      PLAYWRIGHT_WORKERS: '1'
+      CASE_ID: ${{ matrix.id }}
+      ISSUE_NUMBER: ${{ matrix.issue }}
+      PR_NUMBER: ${{ matrix.pr_number }}
+      FIXED_SHA: ${{ matrix.fixed_sha }}
+      REVERTED_SHA: ${{ matrix.reverted_sha }}
+    steps:
+      - name: Check out regression source separately
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ matrix.reverted_sha }}
+          path: reverted
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Check out fixed control separately
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ matrix.fixed_sha }}
+          path: fixed
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: |
+            reverted/package-lock.json
+            fixed/package-lock.json
+      - name: Verify handoffs, ancestry and public issue provenance
+        env:
+          QA_API_URL: ${{ secrets.QA_API_URL }}
+          QA_PROJECT_KEY: ${{ secrets.QA_PROJECT_KEY }}
+        run: |
+          test -n "$QA_API_URL" && test -n "$QA_PROJECT_KEY"
+          test -f reverted/qa/source-store.mjs && test -f fixed/qa/source-store.mjs
+          git -C reverted merge-base --is-ancestor "$FIXED_SHA" "$REVERTED_SHA"
+          test "$(git -C reverted rev-parse HEAD)" = "$REVERTED_SHA"
+          test "$(git -C fixed rev-parse HEAD)" = "$FIXED_SHA"
+          git -C reverted diff --exit-code "$FIXED_SHA" "$REVERTED_SHA" -- qa
+          echo "3bd29d0d30f72172414f416ac8fb94c9183b62b4ebdc226a444e730b806e4448  reverted/qa/metric-specs/controls.spec.mjs" | sha256sum --check
+          git -C reverted diff "$FIXED_SHA...$REVERTED_SHA" > case-diff.txt
+          curl -fsSL "https://api.github.com/repos/evershopcommerce/evershop/issues/$ISSUE_NUMBER" -o issue.json
+      - name: Build both controls from source with separate seeded databases
+        env:
+          NODE_ENV: production
+        run: |
+          npm install -g npm@9
+          for variant in reverted fixed; do
+            export DB_NAME="evershop_metric_$variant"
+            export DATABASE_URL="postgres://postgres:postgres@localhost:5432/$DB_NAME"
+            pushd "$variant"
+            npm install --include=dev
+            npm run compile
+            npm run compile:db
+            PGPASSWORD=postgres psql -h localhost -U postgres -v ON_ERROR_STOP=1 -c "CREATE DATABASE $DB_NAME"
+            node qa/source-store.mjs migrate
+            node qa/source-store.mjs seed
+            node qa/source-store.mjs fixtures
+            node qa/source-store.mjs verify
+            node qa/source-store.mjs build
+            npm install --no-save --package-lock=false --include=dev playwright@1.59.1 @playwright/test@1.59.1
+            popd
+          done
+          ./reverted/node_modules/.bin/playwright install --with-deps chromium
+      - name: Download one runner version for both controls
+        env:
+          QA_API_URL: ${{ secrets.QA_API_URL }}
+        run: |
+          curl --fail --silent --show-error --location --proto '=https' --proto-redir '=https' "${QA_API_URL%/}/runner.mjs" -o reverted/runner.mjs
+          node --check reverted/runner.mjs
+          cp reverted/runner.mjs fixed/runner.mjs
+          echo "7b7b0e28e1afdce9d9996d95489c6a499b249bb61f75cbcf6f80719b717de1dc  reverted/runner.mjs" | sha256sum --check
+          sha256sum reverted/runner.mjs > runner.sha256
+      - name: Start regression store
+        working-directory: reverted
+        env:
+          NODE_ENV: production
+          DB_NAME: evershop_metric_reverted
+          DATABASE_URL: postgres://postgres:postgres@localhost:5432/evershop_metric_reverted
+        run: |
+          nohup node qa/source-store.mjs start > store.log 2>&1 &
+          echo "$!" > store.pid
+          for i in $(seq 1 90); do
+            if curl -fsS -o /dev/null http://localhost:3000/; then exit 0; fi
+            sleep 2
+          done
+          tail -80 store.log
+          exit 2
+      - name: Generate and execute on the reverted revision
+        id: regression
+        working-directory: reverted
+        env:
+          QA_API_URL: ${{ secrets.QA_API_URL }}
+          QA_PROJECT_KEY: ${{ secrets.QA_PROJECT_KEY }}
+        run: |
+          set +e
+          node runner.mjs --mode pr --no-comment --base-url "$QA_BASE_URL" \
+            --sha "$REVERTED_SHA" --base-sha "$FIXED_SHA" --ref "metric/$CASE_ID/reverted" \
+            --pr-number "$PR_NUMBER" --pr-title "Historical replay: issue #$ISSUE_NUMBER" \
+            --pr-body 'Controlled historical replay; see recorded fixed and reverted revisions.' \
+            --issue-file "$GITHUB_WORKSPACE/issue.json"
+          runner_exit=$?
+          set -e
+          echo "exit_code=$runner_exit" >> "$GITHUB_OUTPUT"
+          echo "$runner_exit" > runner-exit.txt
+          # Exit 1 is expected candidate detection; exit 2 is infrastructure, never a catch.
+      - name: Stop regression store before fixed control
+        run: |
+          kill "$(cat reverted/store.pid)"
+          for i in $(seq 1 30); do
+            if ! curl -fsS -o /dev/null http://localhost:3000/; then exit 0; fi
+            sleep 1
+          done
+          echo 'Regression store did not stop'
+          exit 2
+      - name: Start fixed store
+        working-directory: fixed
+        env:
+          NODE_ENV: production
+          DB_NAME: evershop_metric_fixed
+          DATABASE_URL: postgres://postgres:postgres@localhost:5432/evershop_metric_fixed
+        run: |
+          nohup node qa/source-store.mjs start > store.log 2>&1 &
+          for i in $(seq 1 90); do
+            if curl -fsS -o /dev/null http://localhost:3000/; then exit 0; fi
+            sleep 2
+          done
+          tail -80 store.log
+          exit 2
+      - name: Replay the kept suite on the fixed control
+        id: control
+        working-directory: fixed
+        env:
+          QA_API_URL: ${{ secrets.QA_API_URL }}
+          QA_PROJECT_KEY: ${{ secrets.QA_PROJECT_KEY }}
+        run: |
+          set +e
+          node runner.mjs --mode suite --trigger manual --no-comment \
+            --base-url "$QA_BASE_URL" --sha "$FIXED_SHA" --ref "metric/$CASE_ID/fixed"
+          runner_exit=$?
+          set -e
+          echo "exit_code=$runner_exit" >> "$GITHUB_OUTPUT"
+          echo "$runner_exit" > runner-exit.txt
+      - name: Record raw outcomes without publishing a metric claim
+        if: always()
+        env:
+          REGRESSION_EXIT: ${{ steps.regression.outputs.exit_code }}
+          CONTROL_EXIT: ${{ steps.control.outputs.exit_code }}
+        run: |
+          python3 - <<'PY'
+          import json, os
+          keys = ('CASE_ID', 'ISSUE_NUMBER', 'PR_NUMBER', 'FIXED_SHA', 'REVERTED_SHA', 'REGRESSION_EXIT', 'CONTROL_EXIT')
+          evidence = {key.lower(): os.environ.get(key, '') for key in keys}
+          evidence['classification'] = 'pending_manual_evidence_review'
+          evidence['ci_url'] = f"{os.environ['GITHUB_SERVER_URL']}/{os.environ['GITHUB_REPOSITORY']}/actions/runs/{os.environ['GITHUB_RUN_ID']}"
+          with open('metric-evidence.json', 'w') as output:
+              json.dump(evidence, output, indent=2)
+          with open(os.environ['GITHUB_STEP_SUMMARY'], 'a') as output:
+              output.write('Raw historical replay evidence uploaded. Apply METRIC.md before claiming a catch.\n')
+          PY
+      - name: Keep both controls and failure evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: metric-${{ matrix.id }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            reverted/test-results/
+            reverted/qa-artifacts/
+            reverted/store.log
+            reverted/runner-exit.txt
+            fixed/test-results/
+            fixed/qa-artifacts/
+            fixed/store.log
+            fixed/runner-exit.txt
+            metric-evidence.json
+            runner.sha256
+            case-diff.txt
+            issue.json
+          if-no-files-found: warn
+          retention-days: 14
+      - name: Fail infrastructure or incomplete execution
+        if: always()
+        env:
+          REGRESSION_EXIT: ${{ steps.regression.outputs.exit_code }}
+          CONTROL_EXIT: ${{ steps.control.outputs.exit_code }}
+        run: |
+          for code in "$REGRESSION_EXIT" "$CONTROL_EXIT"; do
+            case "$code" in
+              0|1) ;;
+              *) echo 'Historical evaluation incomplete or infrastructure failed; not a detected bug'; exit 2 ;;
+            esac
+          done
