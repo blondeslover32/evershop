@@ -1,0 +1,4 @@
+{
+  "shop": { "language": "en", "timezone": "UTC" },
+  "checkout": { "showShippingNote": true, "allowGuestCheckout": true }
+}
